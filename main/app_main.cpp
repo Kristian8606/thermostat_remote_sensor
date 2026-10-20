@@ -198,6 +198,14 @@ extern "C" void app_main()
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
+    /* SerialNumber and ProductLabel are optional BasicInformation attributes, which are not created by default.
+     * Without them the controllers do not show the serial number of app_device_info.cpp. The values are read
+     * from the device instance info provider. */
+    cluster_t *basic_info_cluster = cluster::get(endpoint::get(node, chip::kRootEndpointId), BasicInformation::Id);
+    ABORT_APP_ON_FAILURE(basic_info_cluster != nullptr, ESP_LOGE(TAG, "Failed to get basic information cluster"));
+    cluster::basic_information::attribute::create_serial_number(basic_info_cluster, NULL, 0);
+    cluster::basic_information::attribute::create_product_label(basic_info_cluster, NULL, 0);
+
     thermostat::config_t thermostat_config;
     /* Unknown until the first report from the remote sensor. */
     thermostat_config.thermostat.local_temperature = nullable<int16_t>();
@@ -248,6 +256,17 @@ extern "C" void app_main()
     cluster::thermostat_user_interface_configuration::config_t ui_config;
     ui_config.temperature_display_mode =
         chip::to_underlying(ThermostatUserInterfaceConfiguration::TemperatureDisplayModeEnum::kCelsius);
+    /* In esp-matter TemperatureDisplayMode and KeypadLockout are not non-volatile: the unit selected in a controller
+     * (e.g. Fahrenheit) would go back to Celsius on every reboot. They are created here as non-volatile first, the
+     * cluster create below then keeps them ("already exists" warnings) and adds the rest of the cluster. */
+    cluster_t *ui_cluster = cluster::create(endpoint, ThermostatUserInterfaceConfiguration::Id, CLUSTER_FLAG_SERVER);
+    ABORT_APP_ON_FAILURE(ui_cluster != nullptr, ESP_LOGE(TAG, "Failed to create thermostat UI configuration cluster"));
+    esp_matter::attribute::create(ui_cluster, ThermostatUserInterfaceConfiguration::Attributes::TemperatureDisplayMode::Id,
+                                  ATTRIBUTE_FLAG_WRITABLE | ATTRIBUTE_FLAG_NONVOLATILE,
+                                  esp_matter_enum8(ui_config.temperature_display_mode));
+    esp_matter::attribute::create(ui_cluster, ThermostatUserInterfaceConfiguration::Attributes::KeypadLockout::Id,
+                                  ATTRIBUTE_FLAG_WRITABLE | ATTRIBUTE_FLAG_NONVOLATILE,
+                                  esp_matter_enum8(ui_config.keypad_lockout));
     cluster::thermostat_user_interface_configuration::create(endpoint, &ui_config, CLUSTER_FLAG_SERVER);
 
     /* Client clusters. A controller binds them to the remote sensor, the thermostat then subscribes to
