@@ -121,9 +121,9 @@ Each new report, each change of the mode or of a setpoint re-evaluates the therm
 -   Auto: both rules above, each with its own setpoint.
 -   Off (and FanOnly/Dry/Sleep): both relays are OFF.
 
-The hysteresis is `THERMOSTAT_HYSTERESIS` (default 0.5 °C). The temperature is rounded to 0.1 °C (the resolution the
-controllers show) before it is compared, so a relay switches off as soon as the shown temperature is equal
-to the setpoint.
+The hysteresis is `THERMOSTAT_HYSTERESIS` (default 0.5 °C). The temperature is compared as Matter reports it, in
+0.01 °C. The controllers show a rounded value (Apple Home 0.5 °C), so a relay can still run for a while when
+the shown temperature already equals the setpoint.
 If the sensor does not report for `THERMOSTAT_SENSOR_TIMEOUT` seconds (default 300), the temperature
 becomes unknown and both relays are switched OFF. Sleepy (ICD) Thread sensors may choose a max reporting
 interval longer than the requested one, then the timeout is extended to two max intervals + 60 s.

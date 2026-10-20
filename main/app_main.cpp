@@ -72,9 +72,8 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         break;
 
     case chip::DeviceLayer::DeviceEventType::kDnssdInitialized:
-        /* esp-matter loads the binding table from NVS (Binding Manager init) on this event. Our work is
-         * scheduled after it, so the bound sensor is found after a reboot. */
-        app_driver_bindings_changed();
+        /* esp-matter loads the binding table from NVS (Binding Manager init) on this event */
+        app_driver_bindings_loaded();
         break;
 
     case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster:
@@ -97,9 +96,6 @@ static esp_err_t app_identification_cb(identification::callback_type_t type, uin
     return ESP_OK;
 }
 
-// This callback is called for every attribute update. The callback implementation shall
-// handle the desired attributes and return an appropriate error code. If the attribute
-// is not of your interest, please do not return an error code and strictly return ESP_OK.
 int32_t app_trace_value(const esp_matter_attr_val_t *val)
 {
     switch (val->type) {
@@ -123,6 +119,9 @@ int32_t app_trace_value(const esp_matter_attr_val_t *val)
     }
 }
 
+// This callback is called for every attribute update. The callback implementation shall
+// handle the desired attributes and return an appropriate error code. If the attribute
+// is not of your interest, please do not return an error code and strictly return ESP_OK.
 static esp_err_t app_attribute_update_cb(callback_type_t type, uint16_t endpoint_id, uint32_t cluster_id,
                                          uint32_t attribute_id, esp_matter_attr_val_t *val, void *priv_data)
 {
@@ -140,13 +139,15 @@ static esp_err_t app_attribute_update_cb(callback_type_t type, uint16_t endpoint
          * read back from the data model in the driver, after the Thermostat server has finished the
          * write (including the dead band adjustment of the other setpoint in Auto). */
         if (attribute_id == Thermostat::Attributes::SystemMode::Id) {
-            ESP_LOGI(TAG, "System mode changed to %u", val->val.u8);
+            APP_LOG("[MODE]     %s (EP%u SystemMode 0x0201/0x001C = %u)", app_system_mode_name(val->val.u8),
+                    endpoint_id, val->val.u8);
             app_driver_thermostat_schedule_update();
         } else if (attribute_id == Thermostat::Attributes::OccupiedHeatingSetpoint::Id ||
                    attribute_id == Thermostat::Attributes::OccupiedCoolingSetpoint::Id) {
-            ESP_LOGI(TAG, "%s setpoint changed to %d.%02d C",
-                     attribute_id == Thermostat::Attributes::OccupiedHeatingSetpoint::Id ? "Heating" : "Cooling",
-                     val->val.i16 / 100, abs(val->val.i16 % 100));
+            bool heating = attribute_id == Thermostat::Attributes::OccupiedHeatingSetpoint::Id;
+            APP_LOG("[SETPOINT] %s %d.%02d C (EP%u %s 0x0201/0x%04" PRIx32 " = %d)", heating ? "heating" : "cooling",
+                    val->val.i16 / 100, abs(val->val.i16 % 100), endpoint_id,
+                    heating ? "OccupiedHeatingSetpoint" : "OccupiedCoolingSetpoint", attribute_id, val->val.i16);
             app_driver_thermostat_schedule_update();
         }
     }

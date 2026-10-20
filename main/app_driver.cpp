@@ -80,7 +80,7 @@ static void app_driver_relay_init(int gpio_num)
 static void app_driver_set_heating(bool on)
 {
     if (heating_on != on) {
-        ESP_LOGI(TAG, "Heating relay %s", on ? "ON" : "OFF");
+        APP_LOG("[RELAY]    HEAT %s (GPIO%d)", on ? "ON" : "OFF", CONFIG_THERMOSTAT_HEAT_RELAY_GPIO);
     }
     heating_on = on;
     gpio_set_level((gpio_num_t)CONFIG_THERMOSTAT_HEAT_RELAY_GPIO, RELAY_LEVEL(on));
@@ -88,9 +88,11 @@ static void app_driver_set_heating(bool on)
 
 static void app_driver_set_cooling(bool on)
 {
+#if CONFIG_THERMOSTAT_ENABLE_COOLING
     if (cooling_on != on) {
-        ESP_LOGI(TAG, "Cooling relay %s", on ? "ON" : "OFF");
+        APP_LOG("[RELAY]    COOL %s (GPIO%d)", on ? "ON" : "OFF", CONFIG_THERMOSTAT_COOL_RELAY_GPIO);
     }
+#endif
     cooling_on = on;
 #if CONFIG_THERMOSTAT_ENABLE_COOLING
     gpio_set_level((gpio_num_t)CONFIG_THERMOSTAT_COOL_RELAY_GPIO, RELAY_LEVEL(on));
@@ -168,17 +170,10 @@ static int16_t app_driver_get_setpoint(uint32_t attribute_id, int16_t default_va
     return val.val.i16;
 }
 
-/* The sensor reports in 0.01 degC, the controllers show 0.1 degC. Compare at the displayed resolution, so
- * the relay switches off as soon as the shown temperature is equal to the setpoint (21.97 C is 22.0 C). */
-static int16_t app_driver_round_to_tenth(int16_t temperature)
-{
-    return (int16_t)(((temperature >= 0) ? (temperature + 5) : (temperature - 5)) / 10 * 10);
-}
-
-/* Heating demand. ON at (setpoint - hysteresis), OFF when the setpoint is reached. */
+/* Heating demand. ON at (setpoint - hysteresis), OFF when the setpoint is reached. The values are compared as
+ * Matter reports them, in 0.01 degC. */
 static bool app_driver_heating_demand(int16_t temperature, int16_t heating_setpoint)
 {
-    temperature = app_driver_round_to_tenth(temperature);
     if (heating_on) {
         return temperature < heating_setpoint;
     }
@@ -189,7 +184,6 @@ static bool app_driver_heating_demand(int16_t temperature, int16_t heating_setpo
 /* Cooling demand. ON at (setpoint + hysteresis), OFF when the setpoint is reached. */
 static bool app_driver_cooling_demand(int16_t temperature, int16_t cooling_setpoint)
 {
-    temperature = app_driver_round_to_tenth(temperature);
     if (cooling_on) {
         return temperature > cooling_setpoint;
     }
@@ -318,14 +312,14 @@ static void app_driver_thermostat_update(intptr_t arg)
     app_driver_set_cooling(cool);
 
 #if CONFIG_THERMOSTAT_ENABLE_COOLING
-    ESP_LOGI(TAG, "Mode: %u, temperature: %s%d.%02d C, heat setpoint: %d.%02d C, cool setpoint: %d.%02d C -> %s",
-             chip::to_underlying(system_mode), remote_temperature < 0 ? "-" : "",
+    APP_LOG("[STATE]    mode %s, temperature %s%d.%02d C, heat %d.%02d C, cool %d.%02d C -> %s",
+             app_system_mode_name(chip::to_underlying(system_mode)), remote_temperature < 0 ? "-" : "",
              abs(remote_temperature) / 100, abs(remote_temperature) % 100,
              heating_setpoint / 100, heating_setpoint % 100, cooling_setpoint / 100, cooling_setpoint % 100,
              !remote_temperature_valid ? "no sensor data" : heat ? "heating" : cool ? "cooling" : "idle");
 #else
-    ESP_LOGI(TAG, "Mode: %u, temperature: %s%d.%02d C, heat setpoint: %d.%02d C -> %s",
-             chip::to_underlying(system_mode), remote_temperature < 0 ? "-" : "",
+    APP_LOG("[STATE]    mode %s, temperature %s%d.%02d C, heat %d.%02d C -> %s",
+             app_system_mode_name(chip::to_underlying(system_mode)), remote_temperature < 0 ? "-" : "",
              abs(remote_temperature) / 100, abs(remote_temperature) % 100,
              heating_setpoint / 100, heating_setpoint % 100,
              !remote_temperature_valid ? "no sensor data" : heat ? "heating" : "idle");
@@ -356,10 +350,10 @@ static void app_driver_remote_temperature_set(bool valid, int16_t temperature)
     nullable<int16_t> local_temperature;
     if (valid) {
         local_temperature = nullable<int16_t>(temperature);
-        ESP_LOGI(TAG, "Remote temperature: %s%d.%02d C", temperature < 0 ? "-" : "",
-                 abs(temperature) / 100, abs(temperature) % 100);
+        APP_LOG("[TEMP]     %s%d.%02d C (EP%u LocalTemperature 0x0201/0x0000 = %d)", temperature < 0 ? "-" : "",
+                abs(temperature) / 100, abs(temperature) % 100, thermostat_endpoint_id, temperature);
     } else {
-        ESP_LOGW(TAG, "Remote temperature: unknown");
+        APP_LOG("[TEMP]     unknown (EP%u LocalTemperature 0x0201/0x0000 = null)", thermostat_endpoint_id);
     }
     esp_matter_attr_val_t val = esp_matter_nullable_int16(local_temperature);
     app_driver_update_attribute(Thermostat::Id, Thermostat::Attributes::LocalTemperature::Id, &val, "sensor report");
@@ -375,9 +369,10 @@ static void app_driver_remote_humidity_set(bool valid, uint16_t humidity)
     chip::app::DataModel::Nullable<uint16_t> measured_value;
     if (valid) {
         measured_value.SetNonNull(humidity);
-        ESP_LOGI(TAG, "Remote humidity: %d.%02d %%", humidity / 100, humidity % 100);
+        APP_LOG("[HUMIDITY] %d.%02d %% (EP%u MeasuredValue 0x0405/0x0000 = %u)", humidity / 100, humidity % 100,
+                thermostat_endpoint_id, humidity);
     } else {
-        ESP_LOGW(TAG, "Remote humidity: unknown");
+        APP_LOG("[HUMIDITY] unknown (EP%u MeasuredValue 0x0405/0x0000 = null)", thermostat_endpoint_id);
     }
     /* RelativeHumidityMeasurement is a code-driven cluster, its MeasuredValue is not kept in the esp-matter
      * attribute storage, so it is set through the cluster instead of attribute::update(). */
@@ -394,9 +389,10 @@ static void app_driver_remote_battery_set(bool valid, uint8_t percent)
     nullable<uint8_t> bat_percent_remaining;
     if (valid) {
         bat_percent_remaining = nullable<uint8_t>(percent);
-        ESP_LOGI(TAG, "Remote battery: %d%s %%", percent / 2, percent % 2 ? ".5" : "");
+        APP_LOG("[BATTERY]  %d%s %% (EP%u BatPercentRemaining 0x002F/0x000C = %u)", percent / 2,
+                percent % 2 ? ".5" : "", thermostat_endpoint_id, percent);
     } else {
-        ESP_LOGW(TAG, "Remote battery: unknown");
+        APP_LOG("[BATTERY]  unknown (EP%u BatPercentRemaining 0x002F/0x000C = null)", thermostat_endpoint_id);
     }
     esp_matter_attr_val_t val = esp_matter_nullable_uint8(bat_percent_remaining);
     app_driver_update_attribute(PowerSource::Id, PowerSource::Attributes::BatPercentRemaining::Id, &val, "sensor report");
@@ -405,7 +401,8 @@ static void app_driver_remote_battery_set(bool valid, uint8_t percent)
 static void app_driver_remote_battery_level_set(uint8_t charge_level)
 {
     static const char *const level_names[] = {"OK", "Warning", "Critical"};
-    ESP_LOGI(TAG, "Remote battery level: %s", charge_level < 3 ? level_names[charge_level] : "unknown");
+    APP_LOG("[BATTERY]  level %s (EP%u BatChargeLevel 0x002F/0x000E = %u)",
+            charge_level < 3 ? level_names[charge_level] : "unknown", thermostat_endpoint_id, charge_level);
     esp_matter_attr_val_t val = esp_matter_enum8(charge_level);
     app_driver_update_attribute(PowerSource::Id, PowerSource::Attributes::BatChargeLevel::Id, &val, "sensor report");
 }
@@ -722,6 +719,22 @@ void app_driver_bindings_changed()
     }
 }
 
+static void app_driver_bindings_loaded_timer_cb(chip::System::Layer *system_layer, void *app_state)
+{
+    app_driver_update_subscriptions(0);
+}
+
+void app_driver_bindings_loaded()
+{
+    /* esp-matter loads the binding table on kDnssdInitialized, in work scheduled from its own event handler.
+     * The event handlers are called in the reverse order of their registration, so the application handler runs
+     * first and work scheduled from it would still see an empty binding table. Subscribe a moment later. */
+    if (chip::DeviceLayer::SystemLayer().StartTimer(chip::System::Clock::Milliseconds32(1000),
+                                                    app_driver_bindings_loaded_timer_cb, nullptr) != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Failed to start the binding table timer");
+    }
+}
+
 /* The sensor sends a report at least every max interval. Allow two missed reports before the
  * temperature is treated as unknown, but never less than CONFIG_THERMOSTAT_SENSOR_TIMEOUT. */
 static int64_t app_driver_sensor_timeout_us()
@@ -826,7 +839,7 @@ static void app_driver_thermostat_start_work(intptr_t arg)
                               THERMOSTAT_ABS_MAX_HEAT_SETPOINT);
 
     /* Apply the mode and setpoints restored from NVS. The relays stay off until the sensor reports.
-     * The subscriptions are started on kDnssdInitialized, when the binding table has been loaded. */
+     * The subscriptions are started after kDnssdInitialized, when the binding table has been loaded. */
     app_driver_thermostat_update(0);
 
     /* The mirrored battery belongs to the thermostat endpoint */

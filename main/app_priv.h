@@ -9,6 +9,7 @@
 #pragma once
 
 #include <esp_err.h>
+#include <esp_log.h>
 #include <esp_matter.h>
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
@@ -54,6 +55,19 @@
 #define APP_TRACE(tag, format, ...) do {} while (0)
 #endif
 
+/* Distinctive log lines for the values that matter: sensor values, relays, setpoints and mode.
+ * They all use the THERMOSTAT tag, so they can also be filtered (e.g. `idf.py monitor | grep THERMOSTAT`). */
+#define APP_LOG_TAG "THERMOSTAT"
+#define APP_LOG(format, ...) ESP_LOGI(APP_LOG_TAG, "========== " format, ##__VA_ARGS__)
+
+/** Name of a Thermostat SystemMode value for the logs */
+static inline const char *app_system_mode_name(uint8_t mode)
+{
+    static const char *const names[] = {"Off", "Auto", "Reserved", "Cool", "Heat", "EmergencyHeat",
+                                        "Precooling", "FanOnly", "Dry", "Sleep"};
+    return mode < sizeof(names) / sizeof(names[0]) ? names[mode] : "Unknown";
+}
+
 /** Value of a numeric attribute as int32 for the trace logs (INT32_MIN for null) */
 int32_t app_trace_value(const esp_matter_attr_val_t *val);
 
@@ -91,6 +105,12 @@ void app_driver_thermostat_schedule_update();
  * that are bound to the thermostat endpoint.
  */
 void app_driver_bindings_changed();
+
+/** Start the subscriptions after the binding table has been loaded from NVS
+ *
+ * Call it on kDnssdInitialized, it waits until esp-matter has loaded the binding table.
+ */
+void app_driver_bindings_loaded();
 
 /** Set the BasicInformation values (vendor/product name, serial number, hardware version) from menuconfig
  *
