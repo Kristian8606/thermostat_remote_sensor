@@ -130,7 +130,51 @@ interval longer than the requested one, then the timeout is extended to two max 
 
 ## 4. Post Commissioning Setup
 
-### 4.1 Bind the sensor to the thermostat
+### 4.1 With Home Assistant (easiest)
+
+Home Assistant (Matter integration with the Matter Server add-on) can commission the thermostat, bind the
+sensor and update the firmware, without any command line.
+
+**Commissioning**
+
+1.  Settings -> Devices & services -> Add device -> Matter, scan the QR code or enter the manual pairing
+    code (default test credentials: `34970112332`, passcode 20202021, discriminator 3840).
+2.  Commission the thermostat into Home Assistant first, so it joins the same Thread network as the sensor.
+3.  Share it to other controllers (e.g. Apple Home) from the device page: Share device.
+
+**Binding the sensor**
+
+1.  Open the thermostat device page. Its client clusters are listed: TemperatureMeasurement (0x0402),
+    RelativeHumidityMeasurement (0x0405) and PowerSource (0x002F).
+2.  Bind TemperatureMeasurement to the temperature endpoint of the sensor (e.g. EP 1 Temperature Sensor) and
+    RelativeHumidityMeasurement to its humidity endpoint (e.g. EP 2 Humidity Sensor).
+3.  Home Assistant writes the binding table of the thermostat and adds the ACL entry on the sensor, which
+    allows the thermostat to subscribe ("ACL present").
+4.  The battery needs no binding (see 4.4). PowerSource can still be bound to the sensor endpoint which has
+    it (usually EP 0, shown as Root Node / OTA Requestor).
+
+The thermostat log shows `Subscribing to sensor node ...` and then `Remote temperature`, `Remote humidity`
+and `Remote battery`.
+
+Every commissioning gives the thermostat a new node id and the sensor keeps the ACL entries of the old ones.
+Matter guarantees only 4 ACL entries per fabric, so "access control list is full" can appear after a few
+re-commissionings: remove the old entries or factory reset the sensor.
+
+**Firmware update (OTA)**
+
+1.  Increase `PROJECT_VER_NUMBER` (and `PROJECT_VER`) in `CMakeLists.txt`, then `idf.py build`.
+2.  Open the Matter Server panel in the Home Assistant sidebar, select the thermostat node and press
+    Upload firmware. Choose `build/thermostat_remote_sensor-ota.bin` (the file with `-ota`, it has the Matter
+    OTA header; the plain `.bin` is only for flashing over USB).
+3.  Confirm the update (it is shown as found on "local"; the warning about an unverified source is expected
+    for a self-built firmware). The image is transferred over Thread in a few minutes and the thermostat
+    restarts with the new version. Fabrics, bindings and settings are kept.
+
+Instead of the button, the image can be copied to `addon_configs/core_matter_server/updates/` (e.g. with the
+Samba share add-on) with the add-on option `enable_test_net_dcl` enabled, then restart the Matter Server add-on.
+The file is imported and removed from the folder.
+
+### 4.2 Bind the sensor with chip-tool
 
 Using the chip-tool, commission 2 devices, the thermostat and a temperature sensor
 (for example the [sensors](../sensors) example).
@@ -157,7 +201,7 @@ Update the thermostat's binding attribute to add the entry of the sensor in the 
 binding write binding '[{"node":20836, "endpoint":1, "cluster":1026}]' 0x7283 0x1
 ```
 
-### 4.2 Bind a humidity sensor
+### 4.3 Bind a humidity sensor with chip-tool
 
 If the humidity comes from the same sensor endpoint, add a second entry with the same node and endpoint,
 one subscription is used for both values:
@@ -174,7 +218,7 @@ binding write binding '[{"node":20836, "endpoint":1, "cluster":1026}, {"node":20
 A binding entry without the `cluster` field binds the whole remote endpoint, it is used for both the
 temperature and the humidity.
 
-### 4.3 Bind the battery of the sensor
+### 4.4 Battery of the sensor
 
 No binding is needed for the battery: the thermostat reads the PowerSource cluster 0x002F (47) from the node
 of the bound temperature sensor, with a wildcard endpoint (the battery is usually on endpoint 0, which the
@@ -186,7 +230,7 @@ binding write binding '[{"node":20836, "endpoint":1, "cluster":1026}, {"node":20
 All the values bound to the same sensor node come with one subscription, also from different endpoints,
 so a battery powered sensor sends one report for all of them.
 
-### 4.4 Control the thermostat
+### 4.5 Control the thermostat with chip-tool
 
 Set Heat mode and a heating setpoint of 22 °C:
 ```
@@ -214,21 +258,26 @@ thermostat read thermostat-running-state 0x7283 0x1
 |--------------------------------------|---------|------------------------------------------------------|
 | `THERMOSTAT_ENABLE_COOLING`          | y       | Cooling feature and cooling relay                    |
 | `THERMOSTAT_ENABLE_AUTO`             | y       | AutoMode feature                                     |
+| `THERMOSTAT_MIN_SETPOINT`            | 16      | Lowest setpoint (°C)                                 |
+| `THERMOSTAT_MAX_SETPOINT`            | 30      | Highest setpoint (°C)                                |
+| `THERMOSTAT_DEAD_BAND`               | 0       | Auto dead band (0.1 °C)                              |
 | `THERMOSTAT_HYSTERESIS`              | 50      | Hysteresis in 0.01 °C                                |
 | `THERMOSTAT_SENSOR_MIN_INTERVAL`     | 5       | Subscription min interval (s)                        |
 | `THERMOSTAT_SENSOR_MAX_INTERVAL`     | 60      | Subscription max interval (s)                        |
 | `THERMOSTAT_SENSOR_TIMEOUT`          | 300     | Relays off when the sensor is silent this long (s)   |
+| `THERMOSTAT_TRACE_LOGS`              | n       | Debug logs of every attribute write                  |
 
-The setpoint limits, the default setpoints and the dead band are in `main/app_priv.h`.
+The default setpoints are in `main/app_priv.h`. The setpoint limits and the dead band are written back on
+every boot, because the old values are kept in NVS after a firmware update.
 
 ### 5.1 OTA update
 
 `CONFIG_CHIP_OTA_IMAGE_BUILD` is enabled, so `idf.py build` also creates `build/thermostat_remote_sensor-ota.bin`
-with the Matter OTA header. An OTA Provider (e.g. Home Assistant) only offers an image whose software version is
-higher than the one running on the device. Increase `PROJECT_VER_NUMBER` (and `PROJECT_VER`) in `CMakeLists.txt`
-for every new image.
+with the Matter OTA header. An OTA Provider (e.g. Home Assistant, see 4.1) only offers an image whose software
+version is higher than the one running on the device. Increase `PROJECT_VER_NUMBER` (and `PROJECT_VER`) in
+`CMakeLists.txt` for every new image.
 
-### 5.1 Thread on ESP32-C6
+### 5.2 Thread on ESP32-C6
 
 The default configuration uses Wi-Fi. To build for Thread on ESP32-C6:
 ```
