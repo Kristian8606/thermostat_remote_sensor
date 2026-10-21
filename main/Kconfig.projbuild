@@ -124,6 +124,15 @@ menu "Thermostat Configuration"
             the heating setpoint. Cooling turns ON when temperature >= cooling setpoint + hysteresis and
             OFF when it drops to the cooling setpoint. Default 50 means 0.5 degC.
 
+    config THERMOSTAT_TEMPERATURE_STEP
+        int "Temperature rounding step (0.01 degC)"
+        default 50
+        range 1 100
+        help
+            The temperature from the sensor is rounded to the nearest multiple of this step before it is
+            shown as LocalTemperature and compared with the setpoints. Default 50 means 0.5 degC
+            (24.20 -> 24.0, 24.30 -> 24.5). 1 keeps the value exactly as the sensor reports it.
+
     config THERMOSTAT_SENSOR_MIN_INTERVAL
         int "Sensor subscription min interval (seconds)"
         default 5

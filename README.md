@@ -121,9 +121,10 @@ Each new report, each change of the mode or of a setpoint re-evaluates the therm
 -   Auto: both rules above, each with its own setpoint.
 -   Off (and FanOnly/Dry/Sleep): both relays are OFF.
 
-The hysteresis is `THERMOSTAT_HYSTERESIS` (default 0.5 °C). The temperature is compared as Matter reports it, in
-0.01 °C. The controllers show a rounded value (Apple Home 0.5 °C), so a relay can still run for a while when
-the shown temperature already equals the setpoint.
+The hysteresis is `THERMOSTAT_HYSTERESIS` (default 0.5 °C). The sensor temperature is first rounded to the
+nearest `THERMOSTAT_TEMPERATURE_STEP` (default 0.5 °C: 24.20 -> 24.0, 24.30 -> 24.5). The rounded value is
+shown as `LocalTemperature` and compared with the setpoints, so the relays follow the temperature the
+controllers show. Set the step to 1 to use the exact 0.01 °C value from the sensor.
 If the sensor does not report for `THERMOSTAT_SENSOR_TIMEOUT` seconds (default 300), the temperature
 becomes unknown and both relays are switched OFF. Sleepy (ICD) Thread sensors may choose a max reporting
 interval longer than the requested one, then the timeout is extended to two max intervals + 60 s.
@@ -262,6 +263,7 @@ thermostat read thermostat-running-state 0x7283 0x1
 | `THERMOSTAT_MAX_SETPOINT`            | 30      | Highest setpoint (°C)                                |
 | `THERMOSTAT_DEAD_BAND`               | 0       | Auto dead band (0.1 °C)                              |
 | `THERMOSTAT_HYSTERESIS`              | 50      | Hysteresis in 0.01 °C                                |
+| `THERMOSTAT_TEMPERATURE_STEP`        | 50      | Sensor temperature rounding step in 0.01 °C          |
 | `THERMOSTAT_SENSOR_MIN_INTERVAL`     | 5       | Subscription min interval (s)                        |
 | `THERMOSTAT_SENSOR_MAX_INTERVAL`     | 60      | Subscription max interval (s)                        |
 | `THERMOSTAT_SENSOR_TIMEOUT`          | 300     | Relays off when the sensor is silent this long (s)   |

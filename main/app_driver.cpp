@@ -344,14 +344,21 @@ void app_driver_thermostat_schedule_update()
  * and re-evaluate the thermostat. */
 static void app_driver_remote_temperature_set(bool valid, int16_t temperature)
 {
+    /* Round to the nearest temperature step (menuconfig), symmetric around 0 */
+    int16_t sensor_temperature = temperature;
+    int step = CONFIG_THERMOSTAT_TEMPERATURE_STEP;
+    int rounded = (abs(temperature) + step / 2) / step * step;
+    temperature = (int16_t)(temperature < 0 ? -rounded : rounded);
+
     remote_temperature_valid = valid;
     remote_temperature = valid ? temperature : 0;
 
     nullable<int16_t> local_temperature;
     if (valid) {
         local_temperature = nullable<int16_t>(temperature);
-        APP_LOG("[TEMP]     %s%d.%02d C (EP%u LocalTemperature 0x0201/0x0000 = %d)", temperature < 0 ? "-" : "",
-                abs(temperature) / 100, abs(temperature) % 100, thermostat_endpoint_id, temperature);
+        APP_LOG("[TEMP]     %s%d.%02d C (sensor %d, EP%u LocalTemperature 0x0201/0x0000 = %d)",
+                temperature < 0 ? "-" : "", abs(temperature) / 100, abs(temperature) % 100, sensor_temperature,
+                thermostat_endpoint_id, temperature);
     } else {
         APP_LOG("[TEMP]     unknown (EP%u LocalTemperature 0x0201/0x0000 = null)", thermostat_endpoint_id);
     }
