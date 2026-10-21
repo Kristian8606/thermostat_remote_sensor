@@ -97,6 +97,14 @@ Status LED:
 | Orange | Heating relay is on                                            |
 | Blue   | Cooling relay is on                                            |
 | White  | Both relays are off (idle, system mode Off or no sensor data)  |
+| Purple | Factory reset pending (release the button)                     |
+| Blinking | Identify (white), TriggerEffect Okay (green), ChannelChange (orange) |
+
+Identify: the Identify command (e.g. "Identify" in Home Assistant, or Apple Home while adding the
+accessory) blinks the LED white every 0.5 s until `IdentifyTime` reaches 0. The TriggerEffect command
+runs a short pattern: Blink 1 blink, Breathe 15 blinks, Okay 2 green blinks, ChannelChange orange for 8 s,
+FinishEffect ends after the current blink, StopEffect stops at once. The relays keep working meanwhile,
+and the factory reset indication has priority over the blinking.
 
 Factory reset: hold the BOOT button (GPIO 9) for 5 s (`CONFIG_BUTTON_LONG_PRESS_TIME_MS`), the LED turns
 purple, release it. All fabrics, the Thread network, the bindings and the setpoints are erased and the device
@@ -125,6 +133,13 @@ The hysteresis is `THERMOSTAT_HYSTERESIS` (default 0.5 °C). The sensor temperat
 nearest `THERMOSTAT_TEMPERATURE_STEP` (default 0.5 °C: 24.20 -> 24.0, 24.30 -> 24.5). The rounded value is
 shown as `LocalTemperature` and compared with the setpoints, so the relays follow the temperature the
 controllers show. Set the step to 1 to use the exact 0.01 °C value from the sensor.
+
+Calibration: `LocalTemperatureCalibration` (0x0010, 0.1 °C, -2.5 .. +2.5 °C) is added to the sensor
+temperature before the rounding: LocalTemperature = round(sensor + calibration). The Thermostat server does
+not apply it, the application does. The first value comes from `THERMOSTAT_TEMPERATURE_CALIBRATION`,
+a value written by a controller is kept in NVS. After a change the temperature is recalculated at once from
+the last sensor value. Apple Home does not show it; with chip-tool, for -0.5 °C:
+`chip-tool thermostat write local-temperature-calibration -5 <node-id> 1`.
 If the sensor does not report for `THERMOSTAT_SENSOR_TIMEOUT` seconds (default 300), the temperature
 becomes unknown and both relays are switched OFF. Sleepy (ICD) Thread sensors may choose a max reporting
 interval longer than the requested one, then the timeout is extended to two max intervals + 60 s.
@@ -264,6 +279,7 @@ thermostat read thermostat-running-state 0x7283 0x1
 | `THERMOSTAT_DEAD_BAND`               | 0       | Auto dead band (0.1 °C)                              |
 | `THERMOSTAT_HYSTERESIS`              | 50      | Hysteresis in 0.01 °C                                |
 | `THERMOSTAT_TEMPERATURE_STEP`        | 50      | Sensor temperature rounding step in 0.01 °C          |
+| `THERMOSTAT_TEMPERATURE_CALIBRATION` | 0       | Initial temperature calibration in 0.1 °C (-25..25)  |
 | `THERMOSTAT_SENSOR_MIN_INTERVAL`     | 5       | Subscription min interval (s)                        |
 | `THERMOSTAT_SENSOR_MAX_INTERVAL`     | 60      | Subscription max interval (s)                        |
 | `THERMOSTAT_SENSOR_TIMEOUT`          | 300     | Relays off when the sensor is silent this long (s)   |

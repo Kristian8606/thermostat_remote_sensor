@@ -93,6 +93,18 @@ static esp_err_t app_identification_cb(identification::callback_type_t type, uin
                                        uint8_t effect_variant, void *priv_data)
 {
     ESP_LOGI(TAG, "Identification callback: type: %u, effect: %u, variant: %u", type, effect_id, effect_variant);
+    /* Called on the Matter thread by the Identify server */
+    switch (type) {
+    case identification::START:
+        app_driver_identify_start();
+        break;
+    case identification::STOP:
+        app_driver_identify_stop();
+        break;
+    case identification::EFFECT:
+        app_driver_identify_effect(effect_id);
+        break;
+    }
     return ESP_OK;
 }
 
@@ -149,6 +161,8 @@ static esp_err_t app_attribute_update_cb(callback_type_t type, uint16_t endpoint
                     val->val.i16 / 100, abs(val->val.i16 % 100), endpoint_id,
                     heating ? "OccupiedHeatingSetpoint" : "OccupiedCoolingSetpoint", attribute_id, val->val.i16);
             app_driver_thermostat_schedule_update();
+        } else if (attribute_id == Thermostat::Attributes::LocalTemperatureCalibration::Id) {
+            app_driver_calibration_changed();
         }
     }
 
@@ -181,6 +195,14 @@ static void app_thermostat_add_optional_attributes(cluster_t *cluster)
     /* LocalTemperature is not measured on this device, it comes from the bound remote sensor. */
     thermostat_attr::create_remote_sensing(cluster,
         chip::to_underlying(Thermostat::RemoteSensingBitmap::kLocalTemperature));
+    /* Offset added to the sensor temperature (0.1 degC). The default from menuconfig is used on the very first
+     * boot only, afterwards the value is restored from NVS. */
+    attribute_t *calibration = thermostat_attr::create_local_temperature_calibration(cluster,
+        CONFIG_THERMOSTAT_TEMPERATURE_CALIBRATION);
+    if (calibration) {
+        esp_matter::attribute::add_bounds(calibration, esp_matter_int8(THERMOSTAT_MIN_CALIBRATION),
+                                          esp_matter_int8(THERMOSTAT_MAX_CALIBRATION));
+    }
 }
 
 extern "C" void app_main()
@@ -233,6 +255,11 @@ extern "C" void app_main()
 
     endpoint_t *endpoint = thermostat::create(node, &thermostat_config, ENDPOINT_FLAG_NONE, thermostat_handle);
     ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "Failed to create thermostat endpoint"));
+
+    /* TriggerEffect is optional in the Identify cluster, the status LED supports the effects */
+    cluster_t *identify_cluster = cluster::get(endpoint, Identify::Id);
+    ABORT_APP_ON_FAILURE(identify_cluster != nullptr, ESP_LOGE(TAG, "Failed to get identify cluster"));
+    cluster::identify::command::create_trigger_effect(identify_cluster);
 
     cluster_t *thermostat_cluster = cluster::get(endpoint, Thermostat::Id);
     ABORT_APP_ON_FAILURE(thermostat_cluster != nullptr, ESP_LOGE(TAG, "Failed to get thermostat cluster"));

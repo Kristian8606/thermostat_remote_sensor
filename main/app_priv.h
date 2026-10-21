@@ -44,6 +44,10 @@
 #define THERMOSTAT_ABS_MAX_COOL_SETPOINT (CONFIG_THERMOSTAT_MAX_SETPOINT * 100)
 #endif
 
+/* LocalTemperatureCalibration range in 0.1 degC (-2.5 .. +2.5 degC, as in the Matter specification) */
+#define THERMOSTAT_MIN_CALIBRATION (-25)
+#define THERMOSTAT_MAX_CALIBRATION 25
+
 /* Default setpoints, used on the very first boot only. Afterwards they are restored from NVS. */
 #define THERMOSTAT_DEFAULT_HEAT_SETPOINT 2100  /* 21 degC */
 #define THERMOSTAT_DEFAULT_COOL_SETPOINT 2500  /* 25 degC */
@@ -99,6 +103,12 @@ void app_driver_thermostat_start(uint16_t endpoint_id);
  */
 void app_driver_thermostat_schedule_update();
 
+/** LocalTemperatureCalibration was changed: recalculate LocalTemperature from the last sensor value
+ *
+ * It is scheduled on the Matter thread, so it is safe to call from any task.
+ */
+void app_driver_calibration_changed();
+
 /** Handle a change of the binding table
  *
  * (Re)subscribes to the TemperatureMeasurement and RelativeHumidityMeasurement servers
@@ -111,6 +121,15 @@ void app_driver_bindings_changed();
  * Call it on kDnssdInitialized, it waits until esp-matter has loaded the binding table.
  */
 void app_driver_bindings_loaded();
+
+/** Identify: blink the status LED until app_driver_identify_stop(). Call it on the Matter thread. */
+void app_driver_identify_start();
+
+/** Identify: stop blinking and show the relay state again. Call it on the Matter thread. */
+void app_driver_identify_stop();
+
+/** Identify TriggerEffect: run a short LED pattern for the effect. Call it on the Matter thread. */
+void app_driver_identify_effect(uint8_t effect_id);
 
 /** Set the BasicInformation values (vendor/product name, serial number, hardware version) from menuconfig
  *

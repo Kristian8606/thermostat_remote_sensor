@@ -133,6 +133,15 @@ menu "Thermostat Configuration"
             shown as LocalTemperature and compared with the setpoints. Default 50 means 0.5 degC
             (24.20 -> 24.0, 24.30 -> 24.5). 1 keeps the value exactly as the sensor reports it.
 
+    config THERMOSTAT_TEMPERATURE_CALIBRATION
+        int "Temperature calibration (0.1 degC)"
+        default 0
+        range -25 25
+        help
+            Initial LocalTemperatureCalibration: added to the sensor temperature before the rounding.
+            For example -5 means -0.5 degC. Used on the very first boot (or after a factory reset) only,
+            afterwards the value written by a controller is restored from NVS.
+
     config THERMOSTAT_SENSOR_MIN_INTERVAL
         int "Sensor subscription min interval (seconds)"
         default 5

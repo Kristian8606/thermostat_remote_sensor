@@ -43,7 +43,8 @@ static uint16_t thermostat_endpoint_id = chip::kInvalidEndpointId;
 
 /* Last values received from the bound remote sensor. The thermostat compares these variables with the
  * setpoints, they are updated on every new report from the sensor. */
-static int16_t remote_temperature = 0;          /* 0.01 degC */
+static int16_t remote_temperature = 0;          /* 0.01 degC, calibrated and rounded */
+static int16_t remote_sensor_temperature = 0;   /* 0.01 degC, as reported by the sensor */
 static bool remote_temperature_valid = false;
 static int64_t remote_temperature_last_seen_us = 0;
 static uint16_t remote_temperature_max_interval = 0;  /* negotiated with the sensor, seconds */
@@ -52,6 +53,14 @@ static bool remote_humidity_valid = false;
 
 /* The button is held long enough for a factory reset, released it resets the device */
 static bool factory_reset_pending = false;
+
+/* Identify: the LED blinks in identify_color. identify_toggles_left is the number of LED changes left,
+ * -1 blinks until the Identify server stops it (IdentifyTime reached 0). */
+#define IDENTIFY_BLINK_PERIOD_MS 500
+static bool identify_active = false;
+static bool identify_led_on = false;
+static int identify_toggles_left = 0;
+static uint8_t identify_color[3] = {0, 0, 0};
 
 /* Current state of the outputs */
 static bool heating_on = false;
@@ -229,12 +238,116 @@ static void app_driver_update_status_led()
 {
     if (factory_reset_pending) {
         app_driver_status_led_set(50, 0, 50);       /* Purple: release the button for a factory reset */
+    } else if (identify_active) {
+        if (identify_led_on) {                      /* Blinking: Identify */
+            app_driver_status_led_set(identify_color[0], identify_color[1], identify_color[2]);
+        } else {
+            app_driver_status_led_set(0, 0, 0);
+        }
     } else if (heating_on) {
         app_driver_status_led_set(60, 20, 0);       /* Orange: heating relay on */
     } else if (cooling_on) {
         app_driver_status_led_set(0, 0, 50);        /* Blue: cooling relay on */
     } else {
         app_driver_status_led_set(25, 25, 25);      /* White: both relays off */
+    }
+}
+
+/*******************************************************************************
+ * Identify
+ ******************************************************************************/
+
+static void app_driver_identify_timer_cb(chip::System::Layer *system_layer, void *app_state);
+
+static void app_driver_identify_end()
+{
+    chip::DeviceLayer::SystemLayer().CancelTimer(app_driver_identify_timer_cb, nullptr);
+    if (identify_active) {
+        APP_LOG("[IDENTIFY] stop");
+    }
+    identify_active = false;
+    identify_led_on = false;
+    app_driver_update_status_led();
+}
+
+static void app_driver_identify_timer_cb(chip::System::Layer *system_layer, void *app_state)
+{
+    if (identify_toggles_left > 0) {
+        identify_toggles_left--;
+    }
+    if (identify_toggles_left == 0) {
+        app_driver_identify_end();
+        return;
+    }
+    identify_led_on = !identify_led_on;
+    app_driver_update_status_led();
+    if (chip::DeviceLayer::SystemLayer().StartTimer(chip::System::Clock::Milliseconds32(IDENTIFY_BLINK_PERIOD_MS),
+                                                    app_driver_identify_timer_cb, nullptr) != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Failed to start the identify timer");
+        app_driver_identify_end();
+    }
+}
+
+/* Start blinking: toggles is the number of LED changes (2 per blink), -1 until app_driver_identify_stop() */
+static void app_driver_identify_blink(uint8_t red, uint8_t green, uint8_t blue, int toggles)
+{
+    identify_color[0] = red;
+    identify_color[1] = green;
+    identify_color[2] = blue;
+    identify_toggles_left = toggles;
+    identify_active = true;
+    identify_led_on = true;
+    app_driver_update_status_led();
+    /* StartTimer() replaces a timer that is already running with the same callback */
+    if (chip::DeviceLayer::SystemLayer().StartTimer(chip::System::Clock::Milliseconds32(IDENTIFY_BLINK_PERIOD_MS),
+                                                    app_driver_identify_timer_cb, nullptr) != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Failed to start the identify timer");
+        app_driver_identify_end();
+    }
+}
+
+void app_driver_identify_start()
+{
+    APP_LOG("[IDENTIFY] start");
+    app_driver_identify_blink(25, 25, 25, -1);      /* White, until IdentifyTime reaches 0 */
+}
+
+void app_driver_identify_stop()
+{
+    app_driver_identify_end();
+}
+
+void app_driver_identify_effect(uint8_t effect_id)
+{
+    using chip::app::Clusters::Identify::EffectIdentifierEnum;
+    switch (static_cast<EffectIdentifierEnum>(effect_id)) {
+    case EffectIdentifierEnum::kBlink:              /* One blink */
+        APP_LOG("[IDENTIFY] effect Blink");
+        app_driver_identify_blink(25, 25, 25, 2);
+        break;
+    case EffectIdentifierEnum::kBreathe:            /* 15 blinks */
+        APP_LOG("[IDENTIFY] effect Breathe");
+        app_driver_identify_blink(25, 25, 25, 30);
+        break;
+    case EffectIdentifierEnum::kOkay:               /* Two green blinks */
+        APP_LOG("[IDENTIFY] effect Okay");
+        app_driver_identify_blink(0, 50, 0, 4);
+        break;
+    case EffectIdentifierEnum::kChannelChange:      /* Orange for 8 s */
+        APP_LOG("[IDENTIFY] effect ChannelChange");
+        app_driver_identify_blink(60, 20, 0, 16);
+        break;
+    case EffectIdentifierEnum::kFinishEffect:       /* Finish the current blink, then stop */
+        APP_LOG("[IDENTIFY] effect FinishEffect");
+        if (identify_active) {
+            identify_toggles_left = identify_led_on ? 1 : 2;
+        }
+        break;
+    case EffectIdentifierEnum::kStopEffect:
+    default:
+        APP_LOG("[IDENTIFY] effect StopEffect (%u)", effect_id);
+        app_driver_identify_end();
+        break;
     }
 }
 
@@ -340,25 +453,42 @@ void app_driver_thermostat_schedule_update()
  * Values from the remote sensor
  ******************************************************************************/
 
-/* Store a new temperature from the sensor, show it as LocalTemperature (CurrentTemperature in Apple Home)
- * and re-evaluate the thermostat. */
-static void app_driver_remote_temperature_set(bool valid, int16_t temperature)
+/* LocalTemperatureCalibration in 0.1 degC (0 if it cannot be read) */
+static int8_t app_driver_get_calibration()
 {
-    /* Round to the nearest temperature step (menuconfig), symmetric around 0 */
-    int16_t sensor_temperature = temperature;
+    esp_matter_attr_val_t val = esp_matter_invalid(NULL);
+    if (attribute::get_val(thermostat_endpoint_id, Thermostat::Id, Thermostat::Attributes::LocalTemperatureCalibration::Id,
+                           &val) != ESP_OK) {
+        return 0;
+    }
+    return val.val.i8;
+}
+
+/* Store a new temperature from the sensor, show it as LocalTemperature (CurrentTemperature in Apple Home)
+ * and re-evaluate the thermostat. The Thermostat server does not apply LocalTemperatureCalibration itself:
+ * the calibration is added first, then the value is rounded to the temperature step. */
+static void app_driver_remote_temperature_set(bool valid, int16_t sensor_temperature)
+{
+    int8_t calibration = app_driver_get_calibration();
+
+    /* Calibration (0.1 degC) and rounding to the nearest temperature step (menuconfig), symmetric around 0 */
+    int calibrated = sensor_temperature + calibration * 10;
     int step = CONFIG_THERMOSTAT_TEMPERATURE_STEP;
-    int rounded = (abs(temperature) + step / 2) / step * step;
-    temperature = (int16_t)(temperature < 0 ? -rounded : rounded);
+    int rounded = (abs(calibrated) + step / 2) / step * step;
+    rounded = calibrated < 0 ? -rounded : rounded;
+    int16_t temperature = (int16_t)(rounded > INT16_MAX ? INT16_MAX : rounded < -27315 ? -27315 : rounded);
 
     remote_temperature_valid = valid;
+    remote_sensor_temperature = valid ? sensor_temperature : 0;
     remote_temperature = valid ? temperature : 0;
 
     nullable<int16_t> local_temperature;
     if (valid) {
         local_temperature = nullable<int16_t>(temperature);
-        APP_LOG("[TEMP]     %s%d.%02d C (sensor %d, EP%u LocalTemperature 0x0201/0x0000 = %d)",
+        APP_LOG("[TEMP]     %s%d.%02d C (sensor %d, calibration %s%d.%d C, EP%u LocalTemperature 0x0201/0x0000 = %d)",
                 temperature < 0 ? "-" : "", abs(temperature) / 100, abs(temperature) % 100, sensor_temperature,
-                thermostat_endpoint_id, temperature);
+                calibration < 0 ? "-" : "+", abs(calibration) / 10, abs(calibration) % 10, thermostat_endpoint_id,
+                temperature);
     } else {
         APP_LOG("[TEMP]     unknown (EP%u LocalTemperature 0x0201/0x0000 = null)", thermostat_endpoint_id);
     }
@@ -366,6 +496,24 @@ static void app_driver_remote_temperature_set(bool valid, int16_t temperature)
     app_driver_update_attribute(Thermostat::Id, Thermostat::Attributes::LocalTemperature::Id, &val, "sensor report");
 
     app_driver_thermostat_update(0);
+}
+
+static void app_driver_calibration_apply(intptr_t arg)
+{
+    int8_t calibration = app_driver_get_calibration();
+    APP_LOG("[CALIBR]   %s%d.%d C (EP%u LocalTemperatureCalibration 0x0201/0x0010 = %d)", calibration < 0 ? "-" : "+",
+            abs(calibration) / 10, abs(calibration) % 10, thermostat_endpoint_id, calibration);
+    if (remote_temperature_valid) {
+        /* Recalculate LocalTemperature from the last value of the sensor */
+        app_driver_remote_temperature_set(true, remote_sensor_temperature);
+    }
+}
+
+void app_driver_calibration_changed()
+{
+    if (chip::DeviceLayer::PlatformMgr().ScheduleWork(app_driver_calibration_apply, 0) != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Failed to schedule the calibration update");
+    }
 }
 
 static void app_driver_remote_humidity_set(bool valid, uint16_t humidity)
