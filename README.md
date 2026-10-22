@@ -288,6 +288,12 @@ thermostat read thermostat-running-state 0x7283 0x1
 The default setpoints are in `main/app_priv.h`. The setpoint limits and the dead band are written back on
 every boot, because the old values are kept in NVS after a firmware update.
 
+`main/matter_project_config.h` (`CONFIG_CHIP_PROJECT_CONFIG`) raises `CHIP_CONFIG_DEVICE_MAX_ACTIVE_CASE_CLIENTS`
+from 2 to 4. On boot the device resumes the subscriptions of the controllers (e.g. Apple Home and Home Assistant)
+and subscribes to the bound sensor; with 2 CASE clients the third session failed and Apple Home showed
+"No Response" until its subscription max interval ran out. The sensor subscription also starts 5 s after boot,
+so the controllers get their CASE sessions first.
+
 ### 5.1 OTA update
 
 `CONFIG_CHIP_OTA_IMAGE_BUILD` is enabled, so `idf.py build` also creates `build/thermostat_remote_sensor-ota.bin`

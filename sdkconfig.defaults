@@ -53,3 +53,6 @@ CONFIG_BSP_BUTTONS_NUM=1
 
 # Vendor/product name, serial number and hardware version from "Thermostat Device Information" (menuconfig)
 CONFIG_CUSTOM_DEVICE_INSTANCE_INFO_PROVIDER=y
+
+# CHIP project configuration (CASE client pool, see main/matter_project_config.h)
+CONFIG_CHIP_PROJECT_CONFIG="main/matter_project_config.h"
