@@ -538,18 +538,17 @@ static void app_driver_remote_humidity_set(bool valid, uint16_t humidity)
 }
 
 /* Store the battery of the sensor and show it in the PowerSource cluster of the thermostat endpoint.
- * percent is in 0.5 % units (200 == 100 %), as in the BatPercentRemaining attribute. */
+ * percent is in 0.5 % units (200 == 100 %), as in the BatPercentRemaining attribute. An unknown value is not written:
+ * the attribute keeps the last reported one (null made Apple Home show the accessory as "No Response"). */
 static void app_driver_remote_battery_set(bool valid, uint8_t percent)
 {
-    nullable<uint8_t> bat_percent_remaining;
-    if (valid) {
-        bat_percent_remaining = nullable<uint8_t>(percent);
-        APP_LOG("[BATTERY]  %d%s %% (EP%u BatPercentRemaining 0x002F/0x000C = %u)", percent / 2,
-                percent % 2 ? ".5" : "", thermostat_endpoint_id, percent);
-    } else {
-        APP_LOG("[BATTERY]  unknown (EP%u BatPercentRemaining 0x002F/0x000C = null)", thermostat_endpoint_id);
+    if (!valid) {
+        APP_LOG("[BATTERY]  unknown, last value kept (EP%u BatPercentRemaining 0x002F/0x000C)", thermostat_endpoint_id);
+        return;
     }
-    esp_matter_attr_val_t val = esp_matter_nullable_uint8(bat_percent_remaining);
+    APP_LOG("[BATTERY]  %d%s %% (EP%u BatPercentRemaining 0x002F/0x000C = %u)", percent / 2, percent % 2 ? ".5" : "",
+            thermostat_endpoint_id, percent);
+    esp_matter_attr_val_t val = esp_matter_nullable_uint8(nullable<uint8_t>(percent));
     app_driver_update_attribute(PowerSource::Id, PowerSource::Attributes::BatPercentRemaining::Id, &val, "sensor report");
 }
 

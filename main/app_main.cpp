@@ -323,9 +323,16 @@ extern "C" void app_main()
     cluster_t *battery_cluster = cluster::power_source::create(endpoint, &battery_config,
                                                                CLUSTER_FLAG_SERVER | CLUSTER_FLAG_CLIENT);
     ABORT_APP_ON_FAILURE(battery_cluster != nullptr, ESP_LOGE(TAG, "Failed to create battery power source"));
-    /* Unknown until the first report from the sensor, 0.5 % units */
-    cluster::power_source::attribute::create_bat_percent_remaining(battery_cluster, nullable<uint8_t>(),
-                                                                   nullable<uint8_t>(0), nullable<uint8_t>(200));
+    /* 0.5 % units. Never null: Apple Home reads it as the Battery Level of the accessory, and a read of a null value
+     * failed on the home hub (HMErrorDomain 4), which marked the whole accessory "No Response" after every command.
+     * 100 % until the first report of the sensor, then the last reported value, kept in NVS over reboots and while
+     * the sensor is not reporting (not bound, out of range). */
+    attribute_t *bat_percent = esp_matter::attribute::create(battery_cluster,
+        PowerSource::Attributes::BatPercentRemaining::Id, ATTRIBUTE_FLAG_NULLABLE | ATTRIBUTE_FLAG_NONVOLATILE,
+        esp_matter_nullable_uint8(nullable<uint8_t>(200)));
+    ABORT_APP_ON_FAILURE(bat_percent != nullptr, ESP_LOGE(TAG, "Failed to create the battery percentage"));
+    esp_matter::attribute::add_bounds(bat_percent, esp_matter_nullable_uint8(nullable<uint8_t>(0)),
+                                      esp_matter_nullable_uint8(nullable<uint8_t>(200)));
 
     thermostat_endpoint_id = endpoint::get_id(endpoint);
     ESP_LOGI(TAG, "Thermostat created with endpoint_id %d", thermostat_endpoint_id);

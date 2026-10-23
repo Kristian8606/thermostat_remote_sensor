@@ -246,6 +246,10 @@ binding write binding '[{"node":20836, "endpoint":1, "cluster":1026}, {"node":20
 All the values bound to the same sensor node come with one subscription, also from different endpoints,
 so a battery powered sensor sends one report for all of them.
 
+The battery (`BatPercentRemaining`) is never null: 100 % until the first report, then the last reported value,
+kept in NVS over reboots and while the sensor is not reporting. Apple Home reads it as the Battery Level of the
+accessory: a null value failed on the home hub and the whole accessory showed "No Response" after every command.
+
 ### 4.5 Control the thermostat with chip-tool
 
 Set Heat mode and a heating setpoint of 22 °C:
