@@ -314,11 +314,11 @@ extern "C" void app_main()
     ABORT_APP_ON_FAILURE(battery_cluster != nullptr, ESP_LOGE(TAG, "Failed to create battery power source"));
     /* 0.5 % units. Never null: Apple Home reads it as the Battery Level of the accessory, and a read of a null value
      * failed on the home hub (HMErrorDomain 4), which marked the whole accessory "No Response" after every command.
-     * 100 % until the first report of the sensor, then the last reported value, kept in NVS over reboots and while
-     * the sensor is not reporting (not bound, out of range). */
+     * 0 % while no sensor is bound (app_driver.cpp), then the last reported value, kept in NVS over reboots and while
+     * the bound sensor is not reporting (out of range). */
     attribute_t *bat_percent = esp_matter::attribute::create(battery_cluster,
         PowerSource::Attributes::BatPercentRemaining::Id, ATTRIBUTE_FLAG_NULLABLE | ATTRIBUTE_FLAG_NONVOLATILE,
-        esp_matter_nullable_uint8(nullable<uint8_t>(200)));
+        esp_matter_nullable_uint8(nullable<uint8_t>(0)));
     ABORT_APP_ON_FAILURE(bat_percent != nullptr, ESP_LOGE(TAG, "Failed to create the battery percentage"));
     esp_matter::attribute::add_bounds(bat_percent, esp_matter_nullable_uint8(nullable<uint8_t>(0)),
                                       esp_matter_nullable_uint8(nullable<uint8_t>(200)));

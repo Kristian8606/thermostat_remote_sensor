@@ -621,6 +621,19 @@ static void app_driver_remote_battery_set(bool valid, uint8_t percent)
     app_driver_update_attribute(PowerSource::Id, PowerSource::Attributes::BatPercentRemaining::Id, &val, "sensor report");
 }
 
+/* No sensor bound: the battery shows 0 % (a value, never null) until a bound sensor reports its battery */
+static void app_driver_battery_unbound()
+{
+    esp_matter_attr_val_t val = esp_matter_invalid(NULL);
+    if (attribute::get_val(thermostat_endpoint_id, PowerSource::Id, PowerSource::Attributes::BatPercentRemaining::Id,
+                           &val) == ESP_OK && val.val.u8 == 0) {
+        return;
+    }
+    APP_LOG("[BATTERY]  0 %%, no sensor bound (EP%u BatPercentRemaining 0x002F/0x000C = 0)", thermostat_endpoint_id);
+    val = esp_matter_nullable_uint8(nullable<uint8_t>(0));
+    app_driver_update_attribute(PowerSource::Id, PowerSource::Attributes::BatPercentRemaining::Id, &val, "no sensor bound");
+}
+
 static void app_driver_remote_battery_level_set(uint8_t charge_level)
 {
     static const char *const level_names[] = {"OK", "Warning", "Critical"};
@@ -932,6 +945,9 @@ static void app_driver_update_subscriptions(intptr_t arg)
     }
     if (!humidity_binding && remote_humidity_valid) {
         app_driver_remote_humidity_set(false, 0);
+    }
+    if (!battery_node) {
+        app_driver_battery_unbound();
     }
 }
 
