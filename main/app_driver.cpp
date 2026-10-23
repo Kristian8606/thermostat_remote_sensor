@@ -8,6 +8,7 @@
 
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <nvs.h>
 #include <driver/gpio.h>
 #include <stdlib.h>
 
@@ -24,7 +25,7 @@
 #include <app/clusters/bindings/binding-table.h>
 #include <app/data-model/Decode.h>
 #include <app/server/Server.h>
-#include <clusters/relative_humidity_measurement/integration.h>
+#include <app/clusters/relative-humidity-measurement-server/CodegenIntegration.h>
 #include <app/clusters/power-source-server/power-source-server.h>
 #include <inttypes.h>
 #include <lib/core/TLVReader.h>
@@ -464,37 +465,82 @@ static int8_t app_driver_get_calibration()
     return val.val.i8;
 }
 
-/* Store a new temperature from the sensor, show it as LocalTemperature (CurrentTemperature in Apple Home)
- * and re-evaluate the thermostat. The Thermostat server does not apply LocalTemperatureCalibration itself:
- * the calibration is added first, then the value is rounded to the temperature step. */
-static void app_driver_remote_temperature_set(bool valid, int16_t sensor_temperature)
+/* The last values of the sensor are kept in NVS: after a reboot, or while the sensor is not reporting (not bound,
+ * out of range), the controllers keep showing them. A null value is never written: Apple Home showed the whole
+ * accessory as "No Response" after reading a null characteristic (the battery). */
+#define APP_SENSOR_NVS_NAMESPACE "app_sensor"
+#define APP_SENSOR_NVS_KEY_TEMPERATURE "temp"
+#define APP_SENSOR_NVS_KEY_HUMIDITY "humidity"
+
+static bool remote_sensor_temperature_known = false;    /* remote_sensor_temperature holds a value (also from NVS) */
+
+static void app_driver_sensor_store(const char *key, uint16_t value)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(APP_SENSOR_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        uint16_t stored = 0;
+        /* Only a changed value is written (flash wear) */
+        if (nvs_get_u16(handle, key, &stored) != ESP_OK || stored != value) {
+            err = nvs_set_u16(handle, key, value);
+            if (err == ESP_OK) {
+                err = nvs_commit(handle);
+            }
+        }
+        nvs_close(handle);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to store %s: %s", key, esp_err_to_name(err));
+    }
+}
+
+static bool app_driver_sensor_load(const char *key, uint16_t *value)
+{
+    nvs_handle_t handle;
+    if (nvs_open(APP_SENSOR_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
+        return false;
+    }
+    bool found = nvs_get_u16(handle, key, value) == ESP_OK;
+    nvs_close(handle);
+    return found;
+}
+
+/* Show remote_sensor_temperature as LocalTemperature (CurrentTemperature in Apple Home). The Thermostat server does not
+ * apply LocalTemperatureCalibration itself: the calibration is added first, then the value is rounded to the
+ * temperature step. */
+static void app_driver_show_temperature(const char *reason)
 {
     int8_t calibration = app_driver_get_calibration();
 
     /* Calibration (0.1 degC) and rounding to the nearest temperature step (menuconfig), symmetric around 0 */
-    int calibrated = sensor_temperature + calibration * 10;
+    int calibrated = remote_sensor_temperature + calibration * 10;
     int step = CONFIG_THERMOSTAT_TEMPERATURE_STEP;
     int rounded = (abs(calibrated) + step / 2) / step * step;
     rounded = calibrated < 0 ? -rounded : rounded;
     int16_t temperature = (int16_t)(rounded > INT16_MAX ? INT16_MAX : rounded < -27315 ? -27315 : rounded);
+    remote_temperature = temperature;
 
+    APP_LOG("[TEMP]     %s%d.%02d C%s (sensor %d, calibration %s%d.%d C, EP%u LocalTemperature 0x0201/0x0000 = %d)",
+            temperature < 0 ? "-" : "", abs(temperature) / 100, abs(temperature) % 100,
+            remote_temperature_valid ? "" : ", last known", remote_sensor_temperature, calibration < 0 ? "-" : "+",
+            abs(calibration) / 10, abs(calibration) % 10, thermostat_endpoint_id, temperature);
+    esp_matter_attr_val_t val = esp_matter_nullable_int16(nullable<int16_t>(temperature));
+    app_driver_update_attribute(Thermostat::Id, Thermostat::Attributes::LocalTemperature::Id, &val, reason);
+}
+
+/* A new temperature from the sensor, or valid == false when it is unknown (sensor silent, no binding): then
+ * LocalTemperature keeps the last value, the relays stop using it. Re-evaluates the thermostat. */
+static void app_driver_remote_temperature_set(bool valid, int16_t sensor_temperature)
+{
     remote_temperature_valid = valid;
-    remote_sensor_temperature = valid ? sensor_temperature : 0;
-    remote_temperature = valid ? temperature : 0;
-
-    nullable<int16_t> local_temperature;
-    if (valid) {
-        local_temperature = nullable<int16_t>(temperature);
-        APP_LOG("[TEMP]     %s%d.%02d C (sensor %d, calibration %s%d.%d C, EP%u LocalTemperature 0x0201/0x0000 = %d)",
-                temperature < 0 ? "-" : "", abs(temperature) / 100, abs(temperature) % 100, sensor_temperature,
-                calibration < 0 ? "-" : "+", abs(calibration) / 10, abs(calibration) % 10, thermostat_endpoint_id,
-                temperature);
+    if (!valid) {
+        APP_LOG("[TEMP]     unknown, last value kept (EP%u LocalTemperature 0x0201/0x0000)", thermostat_endpoint_id);
     } else {
-        APP_LOG("[TEMP]     unknown (EP%u LocalTemperature 0x0201/0x0000 = null)", thermostat_endpoint_id);
+        remote_sensor_temperature = sensor_temperature;
+        remote_sensor_temperature_known = true;
+        app_driver_show_temperature("sensor report");
+        app_driver_sensor_store(APP_SENSOR_NVS_KEY_TEMPERATURE, (uint16_t)sensor_temperature);
     }
-    esp_matter_attr_val_t val = esp_matter_nullable_int16(local_temperature);
-    app_driver_update_attribute(Thermostat::Id, Thermostat::Attributes::LocalTemperature::Id, &val, "sensor report");
-
     app_driver_thermostat_update(0);
 }
 
@@ -503,9 +549,10 @@ static void app_driver_calibration_apply(intptr_t arg)
     int8_t calibration = app_driver_get_calibration();
     APP_LOG("[CALIBR]   %s%d.%d C (EP%u LocalTemperatureCalibration 0x0201/0x0010 = %d)", calibration < 0 ? "-" : "+",
             abs(calibration) / 10, abs(calibration) % 10, thermostat_endpoint_id, calibration);
-    if (remote_temperature_valid) {
+    if (remote_sensor_temperature_known) {
         /* Recalculate LocalTemperature from the last value of the sensor */
-        app_driver_remote_temperature_set(true, remote_sensor_temperature);
+        app_driver_show_temperature("calibration");
+        app_driver_thermostat_update(0);
     }
 }
 
@@ -516,24 +563,46 @@ void app_driver_calibration_changed()
     }
 }
 
+/* RelativeHumidityMeasurement is a code-driven cluster, its MeasuredValue is not kept in the esp-matter attribute
+ * storage, so it is set through the cluster instead of attribute::update(). */
+static void app_driver_show_humidity(uint16_t humidity)
+{
+    CHIP_ERROR err = RelativeHumidityMeasurement::SetMeasuredValue(thermostat_endpoint_id,
+                                                                   chip::app::DataModel::MakeNullable(humidity));
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Failed to set humidity: %" CHIP_ERROR_FORMAT, err.Format());
+    }
+}
+
+/* A new humidity from the sensor, or valid == false: MeasuredValue keeps the last value */
 static void app_driver_remote_humidity_set(bool valid, uint16_t humidity)
 {
     remote_humidity_valid = valid;
-    remote_humidity = valid ? humidity : 0;
-
-    chip::app::DataModel::Nullable<uint16_t> measured_value;
-    if (valid) {
-        measured_value.SetNonNull(humidity);
-        APP_LOG("[HUMIDITY] %d.%02d %% (EP%u MeasuredValue 0x0405/0x0000 = %u)", humidity / 100, humidity % 100,
-                thermostat_endpoint_id, humidity);
-    } else {
-        APP_LOG("[HUMIDITY] unknown (EP%u MeasuredValue 0x0405/0x0000 = null)", thermostat_endpoint_id);
+    if (!valid) {
+        APP_LOG("[HUMIDITY] unknown, last value kept (EP%u MeasuredValue 0x0405/0x0000)", thermostat_endpoint_id);
+        return;
     }
-    /* RelativeHumidityMeasurement is a code-driven cluster, its MeasuredValue is not kept in the esp-matter
-     * attribute storage, so it is set through the cluster instead of attribute::update(). */
-    CHIP_ERROR err = RelativeHumidityMeasurement::SetMeasuredValue(thermostat_endpoint_id, measured_value);
-    if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "Failed to set humidity: %" CHIP_ERROR_FORMAT, err.Format());
+    remote_humidity = humidity;
+    APP_LOG("[HUMIDITY] %d.%02d %% (EP%u MeasuredValue 0x0405/0x0000 = %u)", humidity / 100, humidity % 100,
+            thermostat_endpoint_id, humidity);
+    app_driver_show_humidity(humidity);
+    app_driver_sensor_store(APP_SENSOR_NVS_KEY_HUMIDITY, humidity);
+}
+
+/* After a reboot: the last temperature and humidity of the sensor until it reports again (not used by the control) */
+static void app_driver_sensor_restore()
+{
+    uint16_t value = 0;
+    if (app_driver_sensor_load(APP_SENSOR_NVS_KEY_TEMPERATURE, &value)) {
+        remote_sensor_temperature = (int16_t)value;
+        remote_sensor_temperature_known = true;
+        app_driver_show_temperature("boot: last value of the sensor");
+    }
+    if (app_driver_sensor_load(APP_SENSOR_NVS_KEY_HUMIDITY, &value) && value <= 10000) {
+        remote_humidity = value;
+        APP_LOG("[HUMIDITY] %d.%02d %%, last known (EP%u MeasuredValue 0x0405/0x0000 = %u)", value / 100, value % 100,
+                thermostat_endpoint_id, value);
+        app_driver_show_humidity(value);
     }
 }
 
@@ -992,6 +1061,9 @@ static void app_driver_thermostat_start_work(intptr_t arg)
 #endif
     app_driver_clamp_setpoint(Thermostat::Attributes::OccupiedHeatingSetpoint::Id, THERMOSTAT_ABS_MIN_HEAT_SETPOINT,
                               THERMOSTAT_ABS_MAX_HEAT_SETPOINT);
+
+    /* Temperature and humidity of the sensor until its first report */
+    app_driver_sensor_restore();
 
     /* Apply the mode and setpoints restored from NVS. The relays stay off until the sensor reports.
      * The subscriptions are started after kDnssdInitialized, when the binding table has been loaded. */

@@ -141,8 +141,15 @@ a value written by a controller is kept in NVS. After a change the temperature i
 the last sensor value. Apple Home does not show it; with chip-tool, for -0.5 °C:
 `chip-tool thermostat write local-temperature-calibration -5 <node-id> 1`.
 If the sensor does not report for `THERMOSTAT_SENSOR_TIMEOUT` seconds (default 300), the temperature
-becomes unknown and both relays are switched OFF. Sleepy (ICD) Thread sensors may choose a max reporting
-interval longer than the requested one, then the timeout is extended to two max intervals + 60 s.
+becomes unknown for the control and both relays are switched OFF. Sleepy (ICD) Thread sensors may choose a max
+reporting interval longer than the requested one, then the timeout is extended to two max intervals + 60 s.
+No value of the sensor is ever null in Matter: `LocalTemperature`, the humidity and the battery keep the last
+reported value (kept in NVS, shown again after a reboot). Apple Home showed the whole accessory as "No Response"
+after reading a null value. Only a device which never had a sensor report starts with an unknown temperature.
+
+Built with esp-matter `main` (connectedhomeip v1.7): the code-driven Thermostat server is not integrated in
+esp-matter yet, so in Auto `MinSetpointDeadBand` is not kept. Matter logs only errors
+(`CONFIG_CHIP_LOG_DEFAULT_LEVEL_ERROR` in `sdkconfig.defaults`).
 
 ## 4. Post Commissioning Setup
 

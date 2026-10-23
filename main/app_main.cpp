@@ -230,7 +230,7 @@ extern "C" void app_main()
     cluster::basic_information::attribute::create_product_label(basic_info_cluster, NULL, 0);
 
     thermostat::config_t thermostat_config;
-    /* Unknown until the first report from the remote sensor. */
+    /* Unknown until the first report from the remote sensor, or the last value of the sensor from NVS (app_driver.cpp) */
     thermostat_config.thermostat.local_temperature = nullable<int16_t>();
     /* Off on the very first boot. SystemMode and the setpoints are non-volatile, so after a reboot the
      * values selected by the user are restored from NVS. */
@@ -265,20 +265,9 @@ extern "C" void app_main()
     ABORT_APP_ON_FAILURE(thermostat_cluster != nullptr, ESP_LOGE(TAG, "Failed to get thermostat cluster"));
     app_thermostat_add_optional_attributes(thermostat_cluster);
 
-#if !CONFIG_ESP_MATTER_ENABLE_GENERATED_DATA_MODEL
-    /* The default function list of the Thermostat cluster does not contain the AttributeChanged
-     * callback. Without it the Thermostat server never runs EnsureDeadband(), so in Auto a controller
-     * can end up with heating and cooling setpoints closer than MinSetpointDeadBand (or even crossed).
-     * Register it here so the server moves the other setpoint when one of them is changed. */
-    static const cluster::function_generic_t thermostat_function_list[] = {
-        (cluster::function_generic_t)emberAfThermostatClusterServerInitCallback,
-        (cluster::function_generic_t)MatterThermostatClusterServerAttributeChangedCallback,
-        (cluster::function_generic_t)MatterThermostatClusterServerPreAttributeChangedCallback,
-    };
-    cluster::add_function_list(thermostat_cluster, thermostat_function_list,
-                               CLUSTER_FLAG_INIT_FUNCTION | CLUSTER_FLAG_ATTRIBUTE_CHANGED_FUNCTION |
-                               CLUSTER_FLAG_PRE_ATTRIBUTE_CHANGED_FUNCTION);
-#endif
+    /* esp-matter main (connectedhomeip v1.7) does not integrate the code-driven Thermostat server yet: its init and
+     * PreAttributeChanged callbacks are empty stubs, so there is no dead band adjustment. The setpoint limits are still
+     * enforced by the attribute bounds of esp-matter. */
 
     /* TemperatureDisplayMode is exposed to Apple Home as the TemperatureDisplayUnits characteristic. */
     cluster::thermostat_user_interface_configuration::config_t ui_config;
